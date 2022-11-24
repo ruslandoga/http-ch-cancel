@@ -73,7 +73,7 @@ defmodule HTest do
       {:ok, conn: conn, ref: ref, query_id: query_id}
     end
 
-    test "from another conn", %{query_id: query_id} do
+    test "from another conn", %{query_id: query_id} = ctx do
       conn = H.conn()
 
       {:ok, conn, ref, _query_id} = H.req(conn, "KILL QUERY WHERE query_id = '#{query_id}'")
@@ -82,6 +82,23 @@ defmodule HTest do
 
       assert [["waiting", ^query_id, "default", "SELECT count() FROM system.numbers\\n"]] =
                TSV.parse_string(body, skip_headers: false)
+
+      :timer.sleep(100)
+
+      # now try sending another query
+      %{conn: conn, ref: ref} = ctx
+
+      # but first ensure we get "qury was cancelled" error
+      assert {:ok, conn, [{:status, ^ref, 500}, _headers | responses]} = receive_stream(conn)
+
+      assert merge_body(responses, ref) =~
+               "Code: 394. DB::Exception: Query was cancelled. (QUERY_WAS_CANCELLED) (version "
+
+      # now reuse the connection for the next query
+      assert {:ok, conn, ref, _query_id} = H.req(conn, "select 1 + 1")
+      assert {:ok, _conn, [_status, _headers | responses]} = receive_stream(conn)
+
+      assert merge_body(responses, ref) == "2\n"
     end
 
     # since http pipelining is not supported in clickhouse (see above)
